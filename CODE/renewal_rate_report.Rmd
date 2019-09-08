@@ -1,0 +1,152 @@
+---
+title: "I5 Monthly Renewal Rate Report"
+output:
+  html_document:
+    df_print: paged
+---
+
+Report created on: `r format(Sys.Date(), "%b %d, %Y")`
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+library(tidyverse)
+library(kableExtra)
+library(lubridate)
+library(readxl)
+```
+
+``` {r data_wrangle}
+dat2 <- read_csv("DATA\\newest_renewal_data.csv") %>%
+  rename(member_id = `Constituent ID`,
+         joined_date = `Current Joined On Date`,
+         renewal_date = `History All Renewed On Dates`,
+         curr_expiration_date = `Current Expires On`,
+         curr_member_category = `Current Category`,
+         member_category = `History Membership Category`,
+         expiration_date = `History Expires On`) %>%
+  mutate(renewal_date = as.Date(renewal_date, format = "%m/%d/%Y"),
+         curr_expiration_date = as.Date(curr_expiration_date, format = "%m/%d/%Y"),
+         expiration_date = as.Date(expiration_date, format = "%m/%d/%Y"),
+         member_category = as.factor(member_category),
+         joined_date = as.Date(joined_date, format = "%m/%d/%Y")) %>%
+  select(member_id, joined_date, renewal_date, curr_expiration_date, expiration_date, member_category) %>%
+  arrange(member_id, expiration_date)
+
+cutoff_date <- floor_date(Sys.Date() - months(0), "month") - 1
+
+renewals2<-dat2 %>%
+  group_by(member_id) %>%
+  mutate(next_renewal = lead(renewal_date, order_by=member_id),
+         future_expir = ifelse(expiration_date > Sys.Date(),1,0),
+         member_is_numeric = ifelse(!grepl("\\D", member_id),1,0),
+         CountInst = n(), 
+         membership_year = row_number(),
+         renewal_timing = as.numeric(difftime(next_renewal, expiration_date , units = "days")),
+         renewed = if_else(is.na(renewal_timing) | renewal_timing > 183, 0, 1)) %>%
+  filter(member_is_numeric==1,
+         !is.na(member_id),
+         !member_category %in% c("Corporate", "SED"),
+         expiration_date >= '2018-10-31' & expiration_date <= cutoff_date) %>%
+  select(-member_is_numeric) %>%
+  arrange(member_id, renewal_date)
+```
+
+### Basic renewal rates
+
+A membership purchase is considered a renewal if the transaction occurs within 6 months after the end of a membership expiration. The table below shows the total renewal rate, regardless of the renewal timing, for expiring memberships by type.
+
+The rates are calculated only on memberships that expired at least 7 months ago so that the full rate is known. The data starts with memberships expiring in Oct 2018, the year after the membership structure changed.
+
+``` {r overall_rate, echo=FALSE, message=FALSE}
+full_renewals <- renewals2 %>% 
+  filter(expiration_date <= floor_date(Sys.Date() - months(6), "month") - 1)
+
+basic_renewal_rate <- full_renewals %>%
+  group_by(member_category) %>%
+  summarise(`Renewal Rate`=round(mean(renewed),3)*100, `Member Count`=n(), `Last Exp. Month` = format(max(expiration_date), "%b-%Y")) %>%
+  ungroup() %>%
+  rename(`Member Category` = member_category)
+
+knitr::kable(basic_renewal_rate) %>%
+   kable_styling(bootstrap_options = "striped",
+                 full_width = F)
+
+overall_renewal_rate <- round(mean(full_renewals$renewed), 3) * 100
+```
+
+The renewal rate across memberships is `r overall_renewal_rate`%.
+
+### Detailed Renewal Rates
+
+The table below shows the renewal rate by month, broken out by the timing of the renewal:
+
+* **On Time:** Renewed by expiration date
+* **Less than 1 Month:** Within 31 days of expiration
+* **Late (w/in 6 mos):** Within 183 days of expiration
+* **Overall rate:** Sum across the categories above
+
+This table is also available in a CSV file that can be opened as an excel spreadsheet.
+
+``` {r rate_by_mth}
+renewal_by_mth <- renewals2 %>% 
+  mutate(renew_type = case_when(is.na(renewal_timing) ~ "Never Renewed",
+                               renewal_timing <= 0 ~ "On Time",
+                               renewal_timing <= 31 ~ "Less than 1 Month",
+                               renewal_timing <=183 ~ "Late (w/in 6 mos)",
+                               renewal_timing > 183  ~ "Never Renewed",
+                               TRUE ~ "NonCategory"))
+
+
+renew_dtl <- renewal_by_mth %>%
+  group_by(member_category, expiration_date, renew_type) %>%
+  summarise(occur = n()) %>% 
+  ungroup() %>%
+  # remove periods that are not complete
+  mutate(occur = case_when(
+    expiration_date > Sys.Date() ~ NA_integer_,
+    expiration_date > (Sys.Date() - 31) & renew_type == "Less than 1 Month" ~ NA_integer_,
+    expiration_date > (Sys.Date() - 183) & renew_type == "Late (w/in 6 mos)" ~ NA_integer_,
+    TRUE ~ occur
+  ))
+
+mthly_total <- renewal_by_mth %>%
+  group_by(member_category, expiration_date) %>%
+  summarise(total = n()) %>% 
+  ungroup()
+
+mthly_renewal_rate_by_memcat <- renew_dtl %>%
+  left_join(mthly_total) %>%
+  mutate(`% Renewed` = occur / total)
+
+mthly_renewal_rate_by_memcat_wide <- mthly_renewal_rate_by_memcat %>%
+  select(member_category, expiration_date, total, renew_type, `% Renewed`) %>%
+  mutate(`Exp. Date` = format(expiration_date, "%b-%Y"),
+         `Members` = as.character(total)) %>%
+  spread(renew_type, `% Renewed`) %>%
+  mutate(`Overall Rate` = `On Time` + `Less than 1 Month` + `Late (w/in 6 mos)`) %>%
+  select(member_category, `Exp. Date`, expiration_date, `Members`, `On Time`, `Less than 1 Month`, `Late (w/in 6 mos)`, `Overall Rate`) %>%
+  rename(`Member Category` = member_category)
+
+
+# apply % formatting
+vars <- c("On Time", "Less than 1 Month", "Late (w/in 6 mos)", "Overall Rate")
+mthly_renewal_rate_by_memcat_wide[vars] <- lapply(mthly_renewal_rate_by_memcat_wide[vars], scales::percent)
+
+  # remove the NA % and the previous month's Less than 1 Month
+mthly_renewal_rate_by_memcat_wide <- mthly_renewal_rate_by_memcat_wide %>%
+  mutate(#`Less than 1 Month` = if_else(Sys.Date() - `Exp. Date` < 31, "", `Less than 1 Month`),
+         `Less than 1 Month` = if_else(`Less than 1 Month` == "NA%", "", `Less than 1 Month`),
+         `Late (w/in 6 mos)` = if_else(`Late (w/in 6 mos)` == "NA%", "", `Late (w/in 6 mos)`),
+         `Overall Rate` = if_else(`Overall Rate` == "NA%", "", `Overall Rate`)) %>%
+  arrange(`Member Category`, desc(expiration_date)) %>%
+  select(-expiration_date)
+
+knitr::kable(mthly_renewal_rate_by_memcat_wide) %>%
+   kable_styling(bootstrap_options = "striped", full_width = T, fixed_thead = T) %>%
+  scroll_box(width = "100%", height = "500px")
+
+report_path <- paste0("OUTPUT\\detailed_renewal_rate_", Sys.Date(), ".csv")
+
+write_csv(mthly_renewal_rate_by_memcat_wide, report_path)
+
+```

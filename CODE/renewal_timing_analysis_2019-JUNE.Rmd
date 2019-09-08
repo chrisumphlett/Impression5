@@ -1,0 +1,38 @@
+---
+title: "Renewal Timing Analysis (June 2019)"
+author: "Chris Umphlett"
+date: "August 3, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This assumes that you've already created renewals2 from the renewal_rate_report.
+
+**Note: Renewal rate by timing is underreporting the late renewals**
+
+In the previous analysis done on 2014 - July 2018 late renewals occured around 10% of the time. It is reasonable to expect the overall renewal rate to increase 5 to 10% (until we have enough data to find that that is no longer the case).
+
+## When do people renew relative to expiration
+
+``` {r renewal_timing}
+
+new_renewals <- renewals2 %>%
+  filter(expiration_date >= "2018-10-31", !is.na(renewal_timing), renewal_timing >= -31, member_category != "SED")
+
+ggplot(new_renewals, aes(y = member_category, x = renewal_timing, color = member_category, fill = member_category)) +
+  geom_jitter(width = 0.1, alpha = 0.5) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  ggtitle("Timing of renewals relative to expiration date\n(excludes renewals occuring more than 31 days prior to expiration)")
+
+ggplot(new_renewals, aes(x = renewal_timing, group = member_category, color = member_category)) +
+  stat_ecdf(geom = "step") +
+  scale_y_continuous(labels = scales::percent) +
+  theme_bw() +
+  theme(legend.position = "bottom") +
+  ggtitle("How quickly are the renewals happening in the aggregate?\n(excludes renewals occuring more than 31 days prior to expiration)")
+
+```

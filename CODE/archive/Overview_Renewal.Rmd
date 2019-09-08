@@ -1,0 +1,130 @@
+---
+title: "Understanding Renewal Rates"
+# output: html_notebook
+output:
+  html_document:
+    df_print: paged
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+---
+Serving as the initial analysis of the renewal rates at Impression 5 from 2014-2018
+
+```{r setup,include=FALSE,echo=FALSE,message=FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggthemes)
+library(here)
+```
+
+
+``` {r data_wrangle,include=FALSE,echo=FALSE,message=FALSE}
+# dat<-read_csv("DATA\\member_renewals_2014-2018.csv") %>%
+IMP <- read.csv(here("Impression5-master", "DATA", "member_renewals_2014-2018.csv"), stringsAsFactors = FALSE) %>% 
+  rename(member_id = `Constituent.ID`,
+         renewal_date = `History.All.Renewed.On.Dates`,
+         expiration_date = `History.Expires.On`,
+         member_category = `History.Membership.Category`) %>%
+  mutate(renewal_date = as.Date(renewal_date,format="%d/%m/%Y"),
+         expiration_date = as.Date(expiration_date,format="%d/%m/%Y"),
+         member_category = as.factor(member_category)) %>%
+  mutate(member_is_numeric = ifelse(!grepl("\\D", member_id),1,0)) %>%
+  filter(member_is_numeric==1,
+         !is.na(member_id), !member_id  =="",
+         !member_category=="Corporate") %>% #drop non-numeric member id, NA member id, and first year
+  arrange(member_id, expiration_date) %>%
+  group_by(member_id) %>%
+  mutate(CountInst = n(), RewCount = row_number()) %>%
+  mutate(next_renewal = lead(renewal_date, order_by=member_id),
+         future_expir = ifelse(is.na(next_renewal) & expiration_date > (Sys.Date()-30),1,0)) %>%
+  mutate(RenewComp = difftime(next_renewal, expiration_date , units = "days"),
+         RenewComp = as.numeric(RenewComp)) %>%
+  mutate(RenewMonth = month(expiration_date)) %>%
+  ungroup()
+
+
+```
+
+First step was to see when in general the expiration dates are and what the common member categories are.
+
+From this view, it looks like expiration dates (~1 year after signing up) are more common in December through April and the most common member category being "Family".
+
+``` {r analysis}
+IMP %>% select(member_id, RenewMonth, member_category) %>% unique() %>% group_by(RenewMonth,member_category) %>% summarise(CountMo = n()) %>% 
+  ggplot(aes(RenewMonth, CountMo, fill=member_category))+
+  geom_bar(stat="identity")+
+  scale_x_continuous(breaks= c(1:12))+
+  theme_bw()+
+  ggtitle("Month of Expiration Date by Member Category [1: Jan, 12: Dec]")
+
+```
+
+There were three main renewal types:  
+1. Member renewed on time (renewed in less than 30 days from expiration date)   
+2. Member renewed late (renewed between 30 days and 6 months after expiration date)   
+3. Member didn't renew (renewed after 6 months or never renewed)  
+
+For the sake of the analysis another category was added ("NeverRenew") to captured instances where a member signed up and didn't renew after that.
+
+```{r Trend Renewal Types, fig.width= 10}
+remFuture <- IMP %>% 
+  filter(future_expir == 0) %>% 
+  mutate(RenewType = case_when((RewCount == 1 & is.na(RenewComp)) ~ "NeverRenew",
+                               RenewComp <= 30 ~ "OnTime",
+                               (RenewComp > 30 & RenewComp <=180) ~ "Late",
+                               RenewComp > 180 | (RewCount > 1 & is.na(RenewComp))  ~ "RenewTooLate_Didnt",
+                               TRUE ~ "NonCategory"))
+
+remFuture %>% group_by(RenewType) %>% summarise(Occur = n()) %>% 
+  ungroup()
+
+
+remFuture %>% mutate(RenewMonth = month(expiration_date)) %>% select(member_id, RenewMonth, RenewType) %>% unique() %>% 
+  group_by(RenewMonth,RenewType) %>% summarise(CountMo = n()) %>% 
+  ggplot(aes(RenewMonth, CountMo, fill=RenewType))+
+  geom_bar(stat="identity")+
+  scale_x_continuous(breaks= c(1:12))+
+  theme_bw()+
+  ggtitle("Renewal type by month (all years)")
+
+remFuture %>% mutate(RenewMonth = month(expiration_date), RenewYr = year(expiration_date)) %>% select(member_id, RenewMonth, RenewYr, RenewType) %>% unique() %>% 
+  group_by(RenewMonth,RenewYr, RenewType) %>% summarise(CountMo = n()) %>% 
+  filter(RenewYr < 2019) %>% 
+  ggplot(aes(RenewMonth, CountMo, fill=RenewType))+
+  geom_bar(stat="identity")+
+  scale_x_continuous(breaks= c(1:12))+
+  facet_grid(~RenewYr)+
+  theme_bw()+
+  ggtitle("Renewal type by month (by year)")
+
+```
+
+```{r Percent Renewals by Month , fig.width= 10}
+stackPer <- remFuture %>% mutate(RenewMonth = month(expiration_date)) %>% select(member_id, RenewMonth, RenewType) %>% unique() %>% 
+  group_by(RenewMonth,RenewType) %>% summarise(CountMo = n()) %>% 
+  mutate(ratio=scales::percent(CountMo/sum(CountMo))) %>%  ungroup()
+
+  ggplot(data= stackPer, aes(RenewMonth, CountMo, fill=RenewType))+
+  geom_bar(position = "fill",stat="identity")+
+  geom_text(data=stackPer, aes(y=CountMo,label=ratio),
+            position=position_fill(vjust=0.5))+
+  scale_x_continuous(breaks= c(1:12))+
+  scale_y_continuous(labels = scales::percent)+
+  theme_bw()+
+  ggtitle("Percent of Renewal type by month (all years)")  
+```
+
+```{r Percent Renewals by Month by Year, fig.width= 12, fig.height= 12}
+stackPerYR <- remFuture %>% mutate(RenewMonth = month(expiration_date), RenewYr = year(expiration_date)) %>% select(member_id, RenewMonth, RenewYr,RenewType) %>% unique() %>% 
+  group_by(RenewMonth, RenewYr,RenewType) %>% summarise(CountMo = n()) %>% 
+  mutate(ratio=scales::percent(CountMo/sum(CountMo))) %>%  filter(RenewYr < 2019) %>%  ungroup()
+
+ggplot(data= stackPerYR, aes(RenewMonth, CountMo, fill=RenewType))+
+  geom_bar(position = "fill",stat="identity")+
+  geom_text(data=stackPerYR, aes(y=CountMo,label=ratio),
+            position=position_fill(vjust=0.5))+
+  scale_x_continuous(breaks= c(1:12))+
+  scale_y_continuous(labels = scales::percent)+
+  theme_bw()+
+  facet_grid(RenewYr~.)+
+  ggtitle("Percent of Renewal type by month (by year)")  
+```
+

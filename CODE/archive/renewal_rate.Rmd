@@ -1,0 +1,74 @@
+---
+title: "I5 Renewal Rate since membership structure changed in Oct 2017"
+output:
+  html_document:
+    df_print: paged
+---
+
+## Analysis is done on memberships that expired in Oct - Dec 2018
+
+```{r setup,include=FALSE,message=FALSE}
+library(tidyverse)
+library(knitr)
+```
+
+
+``` {r data_wrangle,echo=FALSE,message=FALSE}
+dat<-read_csv("DATA\\member_renewals_2014-2018.csv") %>%
+  rename(member_id = `Constituent ID`,
+         renewal_date = `History All Renewed On Dates`,
+         expiration_date = `History Expires On`,
+         member_category = `History Membership Category`) %>%
+  mutate(renewal_date = as.Date(renewal_date,format="%d/%m/%Y"),
+         expiration_date = as.Date(expiration_date,format="%d/%m/%Y"),
+         member_category = as.factor(member_category)) %>%
+  arrange(member_id,expiration_date)
+
+renewals<-dat %>%
+  group_by(member_id) %>%
+  mutate(next_renewal = lead(renewal_date, order_by=member_id),
+         future_expir = ifelse(is.na(next_renewal) & expiration_date > (Sys.Date()-30),1,0),
+         member_is_numeric = ifelse(!grepl("\\D", member_id),1,0),
+         renewed = ifelse(!is.na(next_renewal),1,0),
+         CountInst = n(), 
+         membership_year = row_number(),
+         renewal_timing = as.numeric(difftime(next_renewal, expiration_date , units = "days"))) %>%
+  filter(member_is_numeric==1,
+         !is.na(member_id),
+         member_category!="Corporate",
+         expiration_date >= '2018-10-31' & expiration_date <= '2018-12-31') %>% #drop non-numeric member id, NA member id, and first year 
+  select(-member_is_numeric)
+
+```
+
+``` {r analysis, echo=FALSE, message=FALSE}
+renewal_rate<-renewals %>% 
+  group_by(future_expir,member_category) %>%
+  summarise(renewal_rate=round(mean(renewed),3)*100,member_count=n()) %>%
+  ungroup() %>%
+  select(-future_expir)
+
+kable(renewal_rate, caption = "Basic renewal rate (did they ever renew?)")
+
+remFuture <- renewals %>% 
+  filter(future_expir == 0) %>% 
+  mutate(RenewType = case_when(is.na(renewal_timing) ~ "Never Renewed",
+                               renewal_timing <= 30 ~ "On Time",
+                               (renewal_timing > 30 & renewal_timing <=180) ~ "Late (w/in 6 mos)",
+                               renewal_timing > 180  ~ "Re-joined (after 6 mos)",
+                               TRUE ~ "NonCategory"))
+
+count1<-remFuture %>% group_by(member_category, RenewType) %>% summarise(Occur = n()) %>% 
+  ungroup()
+
+count2<-remFuture %>% group_by(member_category) %>% summarise(total = n()) %>% 
+  ungroup() 
+
+renewals2 <- count1 %>% left_join(count2) %>% mutate(renewal_rate = round(Occur/total,3)*100)
+
+kable(renewals2, caption = "Renewal rate by timing of renewal")
+```
+
+**Note: Renewal rate by timing is underreporting the late renewals**
+
+In the previous analysis done on 2014 - July 2018 late renewals occured around 10% of the time. It is reasonable to expect the overall renewal rate to increase 5 to 10% (until we have enough data to find that that is no longer the case).
