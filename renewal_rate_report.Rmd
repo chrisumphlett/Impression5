@@ -12,7 +12,7 @@ knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
 library(tidyverse)
 library(kableExtra)
 library(lubridate)
-library(readxl)
+#library(readxl)
 ```
 
 ``` {r data_wrangle}
@@ -27,10 +27,12 @@ dat2 <- read_csv("DATA\\newest_renewal_data.csv") %>%
   mutate(renewal_date = as.Date(renewal_date, format = "%m/%d/%Y"),
          curr_expiration_date = as.Date(curr_expiration_date, format = "%m/%d/%Y"),
          expiration_date = as.Date(expiration_date, format = "%m/%d/%Y"),
-         member_category = as.factor(member_category),
+         member_category = as.factor(if_else(is.na(`Gift Reference`), member_category, "CEAP")),
+         # member_category = as.factor(member_category),
          joined_date = as.Date(joined_date, format = "%m/%d/%Y")) %>%
   select(member_id, joined_date, renewal_date, curr_expiration_date, expiration_date, member_category) %>%
-  arrange(member_id, expiration_date)
+  arrange(member_id, expiration_date) %>%
+  distinct() # the query change that added the gift recipient column led to some duplicates in the report with the history columns, goes away once you select distinct on just the columns we need
 
 cutoff_date <- floor_date(Sys.Date() - months(0), "month") - 1
 
