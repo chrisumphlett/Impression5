@@ -16,7 +16,7 @@ library(lubridate)
 ```
 
 ``` {r data_wrangle}
-dat2 <- read_csv("DATA\\newest_renewal_data.csv") %>%
+dat2 <- read_csv("DATA\\newest_renewal_data.csv", guess_max = 100000) %>%
   rename(member_id = `Constituent ID`,
          joined_date = `Current Joined On Date`,
          renewal_date = `History All Renewed On Dates`,
